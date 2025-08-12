@@ -11,11 +11,33 @@ export type Sanitized<T> = {
   value: T;
 };
 
-export type TypeChecker<in out T = any> = {
+type TypeCheckerBase<in out T = any> = {
   check(value: unknown): value is T;
   sanitize(value: T): Sanitized<T>;
   toTypeString(options: TypeStringOptions): string;
 };
+
+export type TypeChecker<in out T = any> = {
+  check(value: unknown): value is T;
+  sanitize(value: T): Sanitized<T>;
+  toTypeString(options: TypeStringOptions): string;
+  refine(check: (value: T) => boolean): TypeChecker<T>;
+};
+
+function createTypeChecker<T>(base: TypeCheckerBase<T>): TypeChecker<T> {
+  const result: TypeChecker<T> = {
+    ...base,
+    refine(check) {
+      return createTypeChecker<T>({
+        ...base,
+        check(value: unknown): value is T {
+          return base.check(value) && !!check(value);
+        },
+      });
+    },
+  };
+  return result;
+}
 
 export type OptionalWrapper<T> = { optional: TypeChecker<T> };
 
@@ -34,7 +56,7 @@ export function isOptionalWrapper<T = unknown>(
 function _class<T extends abstract new (...args: any) => any>(
   classObj: T
 ): TypeChecker<InstanceType<T>> {
-  return {
+  return createTypeChecker({
     check(value): value is InstanceType<T> {
       return value instanceof classObj;
     },
@@ -47,7 +69,7 @@ function _class<T extends abstract new (...args: any) => any>(
     toTypeString() {
       return classObj.name;
     },
-  };
+  });
 }
 export { _class as class };
 
@@ -55,7 +77,7 @@ export function nominal<T>(
   checker: (value: unknown) => value is T,
   name: string
 ): TypeChecker<T> {
-  return {
+  return createTypeChecker({
     check(value): value is T {
       return checker(value);
     },
@@ -68,7 +90,7 @@ export function nominal<T>(
     toTypeString() {
       return name;
     },
-  };
+  });
 }
 
 export type TypeOf<T> = T extends TypeChecker<infer K>
@@ -149,7 +171,7 @@ export function optional<T>(type: TypeChecker<T>): OptionalWrapper<T> {
 }
 
 export function array<T>(type: TypeChecker<T>): TypeChecker<T[]> {
-  return {
+  return createTypeChecker({
     check(value): value is T[] {
       if (!(value instanceof Array)) {
         return false;
@@ -185,7 +207,7 @@ export function array<T>(type: TypeChecker<T>): TypeChecker<T[]> {
         }) + "[]"
       );
     },
-  };
+  });
 }
 
 type UnwrapType<T> = T extends OptionalWrapper<infer U>
@@ -210,7 +232,7 @@ export function object<
   schema: T
 ): TypeChecker<{ [K in keyof ObjectTypeFn<T>]: ObjectTypeFn<T>[K] }> {
   type Target = { [K in keyof ObjectTypeFn<T>]: ObjectTypeFn<T>[K] };
-  return {
+  return createTypeChecker({
     check(value): value is Target {
       if (!(value instanceof Object)) {
         return false;
@@ -267,13 +289,13 @@ export function object<
       result += " }";
       return result === "{ }" ? "{}" : result;
     },
-  };
+  });
 }
 
 type LiteralBase = string | number | boolean | null | undefined;
 
 export function literal<T extends LiteralBase>(arg: T): TypeChecker<T> {
-  return {
+  return createTypeChecker({
     check(value): value is T {
       return value === arg;
     },
@@ -295,7 +317,7 @@ export function literal<T extends LiteralBase>(arg: T): TypeChecker<T> {
         return String(arg);
       }
     },
-  };
+  });
 }
 
 function _enum<T extends LiteralBase[]>(...args: T): TypeChecker<T[number]> {
@@ -307,7 +329,7 @@ export function or<T extends TypeChecker[]>(
   ...args: T
 ): TypeChecker<TypeOf<T[number]>> {
   type Target = TypeOf<T[number]>;
-  return {
+  return createTypeChecker({
     check(value): value is Target {
       for (const type of args) {
         if (type.check(value)) {
@@ -327,12 +349,18 @@ export function or<T extends TypeChecker[]>(
               obj[k] = v;
             }
           } else {
-            return sanitized;
+            return {
+              __sanitized: true,
+              value: sanitized,
+            };
           }
         }
       }
 
-      return obj;
+      return {
+        __sanitized: true,
+        value: obj,
+      };
     },
     toTypeString(_options) {
       const options = { ...defaultTypeStringOptions, ..._options };
@@ -353,7 +381,7 @@ export function or<T extends TypeChecker[]>(
       }
       return result;
     },
-  };
+  });
 }
 
 export function and<T extends TypeChecker[]>(
@@ -380,7 +408,7 @@ export function and<T extends TypeChecker[]>(
     TypeOfDefaultTop<T[7]> &
     TypeOfDefaultTop<T[8]> &
     TypeOfDefaultTop<T[9]>;
-  return {
+  return createTypeChecker({
     check(value): value is Target {
       for (const type of args) {
         if (!type.check(value)) {
@@ -400,12 +428,18 @@ export function and<T extends TypeChecker[]>(
               obj[k] = v;
             }
           } else {
-            return sanitized;
+            return {
+              __sanitized: true,
+              value: sanitized,
+            };
           }
         }
       }
 
-      return obj;
+      return {
+        __sanitized: true,
+        value: obj,
+      };
     },
     toTypeString(_options) {
       const options = { ...defaultTypeStringOptions, ..._options };
@@ -426,11 +460,11 @@ export function and<T extends TypeChecker[]>(
       }
       return result;
     },
-  };
+  });
 }
 
 function primitive<T>(name: string): TypeChecker<T> {
-  return {
+  return createTypeChecker({
     check(value): value is T {
       return typeof value === name;
     },
@@ -440,14 +474,14 @@ function primitive<T>(name: string): TypeChecker<T> {
     toTypeString() {
       return name;
     },
-  };
+  });
 }
 
 export const number: TypeChecker<number> = primitive<number>("number");
 export const string: TypeChecker<string> = primitive<string>("string");
 export const boolean: TypeChecker<boolean> = primitive<boolean>("boolean");
 
-const _null: TypeChecker<null> = {
+const _null: TypeChecker<null> = createTypeChecker({
   check(value): value is null {
     return value === null;
   },
@@ -457,10 +491,10 @@ const _null: TypeChecker<null> = {
   toTypeString() {
     return "null";
   },
-};
+});
 export { _null as null };
 
-const _undefined: TypeChecker<void | undefined> = {
+const _undefined: TypeChecker<void | undefined> = createTypeChecker({
   check(value): value is void | undefined {
     return value === undefined;
   },
@@ -470,7 +504,7 @@ const _undefined: TypeChecker<void | undefined> = {
   toTypeString() {
     return "undefined";
   },
-};
+});
 export { _undefined as undefined };
 
 export function nullable<T>(type: TypeChecker<T>): TypeChecker<T | null> {

@@ -39,7 +39,10 @@ function _class<T extends abstract new (...args: any) => any>(
       return value instanceof classObj;
     },
     sanitize(value) {
-      return value;
+      return {
+        __sanitized: true,
+        value,
+      };
     },
     toTypeString() {
       return classObj.name;

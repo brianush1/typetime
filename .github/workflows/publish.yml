@@ -27,8 +27,8 @@ jobs:
           run_install: false
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test --if-present
-      - run: pnpm build --if-present
+      - run: pnpm test
+      - run: pnpm build
 
       - name: Publish
         env:

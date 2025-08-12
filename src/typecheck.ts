@@ -20,13 +20,19 @@ type TypeCheckerBase<in out T = any> = {
 export type TypeChecker<in out T = any> = {
   check(value: unknown): value is T;
   sanitize(value: T): Sanitized<T>;
-  toTypeString(options: TypeStringOptions): string;
+  toTypeString(options?: TypeStringOptions): string;
   refine(check: (value: T) => boolean): TypeChecker<T>;
 };
 
 function createTypeChecker<T>(base: TypeCheckerBase<T>): TypeChecker<T> {
   const result: TypeChecker<T> = {
     ...base,
+    toTypeString(options?: TypeStringOptions): string {
+      return base.toTypeString({
+        ...defaultTypeStringOptions,
+        ...(options ?? {}),
+      });
+    },
     refine(check) {
       return createTypeChecker<T>({
         ...base,
@@ -198,8 +204,7 @@ export function array<T>(type: TypeChecker<T>): TypeChecker<T[]> {
         value: newValue,
       };
     },
-    toTypeString(_options) {
-      const options = { ...defaultTypeStringOptions, ..._options };
+    toTypeString(options) {
       return (
         type.toTypeString({
           ...options,
@@ -274,8 +279,7 @@ export function object<
         value: newValue as Target,
       };
     },
-    toTypeString(_options) {
-      const options = { ...defaultTypeStringOptions, ..._options };
+    toTypeString(options) {
       let result = "";
       result += "{";
       for (const [key, inputType] of Object.entries(schema)) {
@@ -362,8 +366,7 @@ export function or<T extends TypeChecker[]>(
         value: obj,
       };
     },
-    toTypeString(_options) {
-      const options = { ...defaultTypeStringOptions, ..._options };
+    toTypeString(options) {
       let result = "";
       if (options.nested) {
         result += "(";
@@ -441,8 +444,7 @@ export function and<T extends TypeChecker[]>(
         value: obj,
       };
     },
-    toTypeString(_options) {
-      const options = { ...defaultTypeStringOptions, ..._options };
+    toTypeString(options) {
       let result = "";
       if (options.nested) {
         result += "(";

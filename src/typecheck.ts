@@ -612,3 +612,39 @@ export { _undefined as undefined };
 export function nullable<T>(type: TypeChecker<T>): TypeChecker<T | null> {
   return or(type, _null);
 }
+
+export const any: TypeChecker<any> = createTypeChecker({
+  check(value): value is any {
+    return true;
+  },
+  sanitize(value: any): Sanitized<any> {
+    return { __sanitized: true, value };
+  },
+  toTypeString() {
+    return "any";
+  },
+});
+
+export const unknown: TypeChecker<unknown> = createTypeChecker({
+  check(value): value is unknown {
+    return true;
+  },
+  sanitize(value: unknown): Sanitized<unknown> {
+    return { __sanitized: true, value };
+  },
+  toTypeString() {
+    return "unknown";
+  },
+});
+
+export const never: TypeChecker<never> = createTypeChecker({
+  check(value): value is never {
+    return false;
+  },
+  sanitize(_value: never): Sanitized<never> {
+    throw new Error("unreachable code reached");
+  },
+  toTypeString() {
+    return "never";
+  },
+});

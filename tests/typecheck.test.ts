@@ -94,6 +94,357 @@ describe("Objects", () => {
   });
 });
 
+describe("Tuple types", () => {
+  describe("Basic tuple functionality", () => {
+    const stringNumberTuple = t.tuple(t.string, t.number);
+
+    it("should pass type checks with correct values", () => {
+      expect(stringNumberTuple.check(["hello", 42])).toBe(true);
+      expect(stringNumberTuple.check(["", 0])).toBe(true);
+      expect(stringNumberTuple.check(["test", -5])).toBe(true);
+    });
+
+    it("should fail type checks with incorrect values", () => {
+      expect(stringNumberTuple.check([42, "hello"])).toBe(false); // swapped types
+      expect(stringNumberTuple.check(["hello"])).toBe(false); // too few elements
+      expect(stringNumberTuple.check(["hello", 42, "extra"])).toBe(false); // too many elements
+      expect(stringNumberTuple.check("not-array")).toBe(false); // not an array
+      expect(stringNumberTuple.check(null)).toBe(false);
+      expect(stringNumberTuple.check(undefined)).toBe(false);
+    });
+
+    it("should sanitize correctly", () => {
+      const result = stringNumberTuple.sanitize(["hello", 42]);
+      expect(result.value).toEqual(["hello", 42]);
+      expect(result.__sanitized).toBe(true);
+    });
+
+    it("should generate correct type strings", () => {
+      expect(stringNumberTuple.toTypeString()).toBe("[string, number]");
+
+      const complexTuple = t.tuple(
+        t.string,
+        t.object({ id: t.number }),
+        t.array(t.boolean)
+      );
+      expect(complexTuple.toTypeString()).toBe(
+        "[string, { id: number; }, boolean[]]"
+      );
+    });
+  });
+
+  describe("Empty and single element tuples", () => {
+    const emptyTuple = t.tuple();
+    const singleTuple = t.tuple(t.string);
+
+    it("should handle empty tuples", () => {
+      expect(emptyTuple.check([])).toBe(true);
+      expect(emptyTuple.check([1])).toBe(false); // wrong length
+      expect(emptyTuple.sanitize([]).value).toEqual([]);
+      expect(emptyTuple.toTypeString()).toBe("[]");
+    });
+
+    it("should handle single element tuples", () => {
+      expect(singleTuple.check(["hello"])).toBe(true);
+      expect(singleTuple.check([])).toBe(false); // wrong length
+      expect(singleTuple.check(["hello", "world"])).toBe(false); // wrong length
+      expect(singleTuple.sanitize(["test"]).value).toEqual(["test"]);
+      expect(singleTuple.toTypeString()).toBe("[string]");
+    });
+  });
+
+  describe("Mixed primitive and complex types", () => {
+    const mixedTuple = t.tuple(
+      t.string,
+      t.number,
+      t.object({ name: t.string }),
+      t.array(t.number),
+      t.boolean
+    );
+
+    it("should validate mixed types correctly", () => {
+      const validValue = ["hello", 42, { name: "test" }, [1, 2, 3], true];
+      expect(mixedTuple.check(validValue)).toBe(true);
+    });
+
+    it("should fail with invalid mixed types", () => {
+      expect(
+        mixedTuple.check([
+          42, // wrong type
+          42,
+          { name: "test" },
+          [1, 2, 3],
+          true,
+        ])
+      ).toBe(false);
+
+      expect(
+        mixedTuple.check([
+          "hello",
+          42,
+          { name: 123 }, // wrong nested type
+          [1, 2, 3],
+          true,
+        ])
+      ).toBe(false);
+    });
+
+    it("should sanitize mixed types correctly", () => {
+      const input: t.TypeOf<typeof mixedTuple> = [
+        "hello",
+        42,
+        { name: "test", extra: "removed" } as any, // extra property should be removed
+        [1, 2, 3],
+        true,
+      ];
+      const result = mixedTuple.sanitize(input);
+      expect(result.value).toEqual([
+        "hello",
+        42,
+        { name: "test" }, // extra property removed
+        [1, 2, 3],
+        true,
+      ]);
+    });
+  });
+
+  describe("Nested tuples", () => {
+    const nestedTuple = t.tuple(
+      t.string,
+      t.tuple(t.number, t.boolean),
+      t.array(t.tuple(t.string, t.number))
+    );
+
+    it("should validate nested tuples", () => {
+      const validValue = [
+        "outer",
+        [42, true],
+        [
+          ["a", 1],
+          ["b", 2],
+        ],
+      ];
+      expect(nestedTuple.check(validValue)).toBe(true);
+    });
+
+    it("should fail with invalid nested tuples", () => {
+      expect(
+        nestedTuple.check([
+          "outer",
+          [42], // missing boolean
+          [
+            ["a", 1],
+            ["b", 2],
+          ],
+        ])
+      ).toBe(false);
+
+      expect(
+        nestedTuple.check([
+          "outer",
+          [42, true],
+          [
+            ["a", 1],
+            ["b", "not-number"],
+          ], // wrong type in nested tuple
+        ])
+      ).toBe(false);
+    });
+
+    it("should sanitize nested tuples", () => {
+      const input: t.TypeOf<typeof nestedTuple> = [
+        "outer",
+        [42, true],
+        [
+          ["a", 1],
+          ["b", 2],
+        ],
+      ];
+      const result = nestedTuple.sanitize(input);
+      expect(result.value).toEqual(input);
+    });
+
+    it("should generate correct type strings for nested tuples", () => {
+      expect(nestedTuple.toTypeString()).toBe(
+        "[string, [number, boolean], [string, number][]]"
+      );
+    });
+  });
+
+  describe("Tuples in objects and arrays", () => {
+    const objectWithTuple = t.object({
+      coordinates: t.tuple(t.number, t.number),
+      name: t.string,
+    });
+
+    const arrayOfTuples = t.array(t.tuple(t.string, t.number));
+
+    it("should validate tuples in objects", () => {
+      expect(
+        objectWithTuple.check({
+          coordinates: [10, 20],
+          name: "point",
+        })
+      ).toBe(true);
+
+      expect(
+        objectWithTuple.check({
+          coordinates: [10], // missing y coordinate
+          name: "point",
+        })
+      ).toBe(false);
+    });
+
+    it("should validate arrays of tuples", () => {
+      expect(
+        arrayOfTuples.check([
+          ["a", 1],
+          ["b", 2],
+          ["c", 3],
+        ])
+      ).toBe(true);
+
+      expect(
+        arrayOfTuples.check([
+          ["a", 1],
+          ["b"], // missing number
+          ["c", 3],
+        ])
+      ).toBe(false);
+    });
+
+    it("should sanitize tuples in complex structures", () => {
+      const objectResult = objectWithTuple.sanitize({
+        coordinates: [10, 20],
+        name: "point",
+        extra: "removed",
+      } as any);
+      expect(objectResult.value).toEqual({
+        coordinates: [10, 20],
+        name: "point",
+      });
+
+      const arrayResult = arrayOfTuples.sanitize([
+        ["a", 1],
+        ["b", 2],
+      ]);
+      expect(arrayResult.value).toEqual([
+        ["a", 1],
+        ["b", 2],
+      ]);
+    });
+  });
+
+  describe("Tuple error handling and field paths", () => {
+    const complexTuple = t.tuple(
+      t.string,
+      t.object({ id: t.number }),
+      t.array(t.string)
+    );
+
+    it("should provide correct field paths for tuple errors", () => {
+      const result = t.parse(complexTuple, [
+        123, // wrong type at index 0
+        { id: "not-number" }, // wrong nested type at index 1.id
+        ["valid", 456], // wrong type at index 2.1
+      ]);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors).toHaveLength(3);
+
+        // Error at tuple index 0
+        expect(result.errors[0].field).toEqual([0]);
+        expect(result.errors[0].message).toBe("expected string");
+
+        // Error at tuple index 1, nested field id
+        expect(result.errors[1].field).toEqual([1, "id"]);
+        expect(result.errors[1].message).toBe("expected number");
+
+        // Error at tuple index 2, array index 1
+        expect(result.errors[2].field).toEqual([2, 1]);
+        expect(result.errors[2].message).toBe("expected string");
+      }
+    });
+
+    it("should handle array length correctly", () => {
+      const schema = t.tuple(t.string, t.number);
+
+      // Too few elements should fail
+      const tooFewResult = t.parse(schema, ["hello"]);
+      expect(tooFewResult.success).toBe(false);
+      if (!tooFewResult.success) {
+        expect(tooFewResult.errors[0].message).toBe(
+          "expected array of length 2"
+        );
+      }
+
+      // Too many elements should fail
+      const tooManyResult = t.parse(schema, ["hello", 42, "extra"]);
+      expect(tooManyResult.success).toBe(false);
+      if (!tooManyResult.success) {
+        expect(tooManyResult.errors[0].message).toBe(
+          "expected array of length 2"
+        );
+      }
+    });
+  });
+
+  describe("Tuples with refinements", () => {
+    const refinedTuple = t.tuple(
+      t.string.refine((s) => s.length > 0, "String cannot be empty"),
+      t.number.refine((n) => n > 0, "Number must be positive")
+    );
+
+    it("should validate refined tuple elements", () => {
+      expect(refinedTuple.check(["hello", 42])).toBe(true);
+      expect(refinedTuple.check(["", 42])).toBe(false); // empty string fails refinement
+      expect(refinedTuple.check(["hello", -1])).toBe(false); // negative number fails refinement
+    });
+
+    it("should provide refinement error messages", () => {
+      const result = t.parse(refinedTuple, ["", -5]);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors).toHaveLength(2);
+        expect(result.errors[0].message).toBe("String cannot be empty");
+        expect(result.errors[1].message).toBe("Number must be positive");
+      }
+    });
+
+    it("should sanitize refined tuples", () => {
+      const result = refinedTuple.sanitize(["hello", 42]);
+      expect(result.value).toEqual(["hello", 42]);
+    });
+  });
+
+  describe("TypeScript type inference", () => {
+    it("should infer correct tuple types", () => {
+      const schema = t.tuple(t.string, t.number, t.boolean);
+
+      // TypeScript should infer the type as [string, number, boolean]
+      const v = ["hello", 42, true] as unknown;
+      if (schema.check(v)) {
+        // At compile time, TypeScript knows this is [string, number, boolean]
+        let str: string, num: number, bool: boolean;
+        [str, num, bool] = v; // This assignment should be type-safe
+        expect(typeof str).toBe("string");
+        expect(typeof num).toBe("number");
+        expect(typeof bool).toBe("boolean");
+      }
+    });
+
+    it("should work with t.TypeOf for type extraction", () => {
+      const schema = t.tuple(t.string, t.object({ id: t.number }));
+      type TupleType = t.TypeOf<typeof schema>;
+
+      // This should be typed as [string, { id: number }]
+      const validValue: TupleType = ["test", { id: 123 }];
+      expect(schema.check(validValue)).toBe(true);
+    });
+  });
+});
+
 describe("Union types", () => {
   const type = t.or(
     t.literal("hi"),

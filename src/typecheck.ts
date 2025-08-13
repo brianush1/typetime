@@ -396,6 +396,76 @@ export function literal<T extends LiteralBase>(arg: T): TypeChecker<T> {
   });
 }
 
+type TupleTypes<Tuple extends [...any[]]> = {
+  [Index in keyof Tuple]: TypeOf<Tuple[Index]>;
+} & { length: Tuple["length"] };
+export function tuple<T extends TypeChecker[]>(
+  ...args: T
+): TypeChecker<TupleTypes<T>> {
+  type Target = TupleTypes<T>;
+  return createTypeChecker({
+    check(value): value is Target {
+      if (!(value instanceof Array)) {
+        currentErrors?.push(
+          new ParseError([...currentField], "expected array")
+        );
+        return false;
+      }
+
+      if (value.length !== args.length) {
+        currentErrors?.push(
+          new ParseError(
+            [...currentField],
+            "expected array of length " + args.length
+          )
+        );
+        return false;
+      }
+
+      let good = true;
+      for (let i = 0; i < args.length; i++) {
+        try {
+          currentField.push(i);
+          const success = args[i]!.check(value[i]);
+          if (!success) {
+            good = false;
+          }
+        } finally {
+          currentField.pop();
+        }
+      }
+
+      return good;
+    },
+    sanitize(value) {
+      const res = [] as Target;
+
+      for (let i = 0; i < args.length; i++) {
+        res.push(args[i]!.sanitize(value[i]).value);
+      }
+
+      return {
+        __sanitized: true,
+        value: res,
+      };
+    },
+    toTypeString(options) {
+      let result = "";
+      result += "[";
+      result += args
+        .map((type) =>
+          type.toTypeString({
+            ...options,
+            nested: true,
+          })
+        )
+        .join(", ");
+      result += "]";
+      return result;
+    },
+  });
+}
+
 function _enum<T extends LiteralBase[]>(...args: T): TypeChecker<T[number]> {
   return or(...args.map(literal));
 }

@@ -8,8 +8,11 @@ A TypeScript runtime type checking and validation library that provides compile-
 - 🧹 **Data Sanitization** - Clean and transform data while preserving type safety
 - 🔗 **Composable Types** - Build complex types from simple primitives
 - 📝 **Type String Generation** - Generate human-readable type descriptions
-- 🎯 **Refinement Types** - Add custom validation logic to existing types
+- 🎯 **Type Refinements** - Add custom validation logic with custom error messages
 - 📦 **JSON Parsing** - Parse and validate JSON with detailed error handling
+- 🚨 **Rich Error Reporting** - Detailed error messages with field path tracking
+- 🏗️ **Object Error Collection** - Collect all validation errors, not just the first one
+- 🎭 **Class & Nominal Types** - Support for class instances and custom nominal types
 
 ## Installation
 
@@ -30,7 +33,7 @@ import { t } from 'typetime';
 const UserSchema = t.object({
   id: t.number,
   name: t.string,
-  email: t.string.refine(email => email.includes('@')),
+  email: t.string.refine(email => email.includes('@'), 'Must be a valid email'),
   age: t.optional(t.number),
   roles: t.array(t.enum('admin', 'user', 'guest'))
 });
@@ -56,7 +59,10 @@ const result = t.parse(UserSchema, userData);
 if (result.success) {
   console.log(result.value); // Validated User object
 } else {
-  console.error(result.error.message);
+  // Multiple errors with field paths
+  result.errors.forEach(error => {
+    console.error(`Error at ${error.field.join('.')}: ${error.message}`);
+  });
 }
 ```
 
@@ -116,17 +122,29 @@ t.and(
 
 ### Refinement Types
 
-Add custom validation logic to existing types:
+Add custom validation logic to existing types with enhanced error messages:
 
 ```typescript
+// Simple refinements with default error messages
 const PositiveNumber = t.number.refine(n => n > 0);
-const ValidEmail = t.string.refine(s => s.includes('@') && s.includes('.'));
 
-// Chain multiple refinements
+// Custom string error messages
+const ValidEmail = t.string.refine(
+  s => s.includes('@') && s.includes('.'),
+  'Must be a valid email address'
+);
+
+// Dynamic error messages using functions
+const MinAge = t.number.refine(
+  age => age >= 18,
+  age => `Age ${age} is too young, must be 18 or older`
+);
+
+// Chain multiple refinements (fail-fast behavior)
 const StrongPassword = t.string
-  .refine(s => s.length >= 8)
-  .refine(s => /[A-Z]/.test(s))
-  .refine(s => /[0-9]/.test(s));
+  .refine(s => s.length >= 8, 'Password must be at least 8 characters')
+  .refine(s => /[A-Z]/.test(s), 'Password must contain uppercase letter')
+  .refine(s => /[0-9]/.test(s), 'Password must contain a number');
 ```
 
 ### Class Types
@@ -185,18 +203,30 @@ const schema = t.object({ name: t.string, age: t.number });
 console.log(schema.toTypeString()); // "{ name: string, age: number }"
 ```
 
-### `refine(check: (value: T) => boolean): TypeChecker<T>`
+### `refine(check: (value: T) => boolean, message?: string | ((value: T) => string)): TypeChecker<T>`
 
-Adds custom validation logic to an existing type checker:
+Adds custom validation logic to an existing type checker with optional custom error messages:
 
 ```typescript
+// Default error message
 const PositiveNumber = t.number.refine(n => n > 0);
-const ValidEmail = t.string.refine(email => email.includes('@'));
 
-// Chain multiple refinements
+// Custom string error message
+const ValidEmail = t.string.refine(
+  email => email.includes('@'),
+  'Must be a valid email address'
+);
+
+// Dynamic error message function
+const ValidRange = t.number.refine(
+  n => n >= 1 && n <= 100,
+  n => `Value ${n} is out of range (1-100)`
+);
+
+// Chain multiple refinements (fail-fast)
 const StrongPassword = t.string
-  .refine(s => s.length >= 8)
-  .refine(s => /[A-Z]/.test(s));
+  .refine(s => s.length >= 8, 'Too short')
+  .refine(s => /[A-Z]/.test(s), 'Missing uppercase letter');
 ```
 
 ## Parsing Functions
@@ -210,7 +240,10 @@ const result = t.parse(t.number, "123");
 if (result.success) {
   console.log(result.value); // number (if valid)
 } else {
-  console.error(result.error); // ParseError
+  // Enhanced error handling with multiple errors
+  result.errors.forEach(error => {
+    console.error(`Field ${error.field.join('.')}: ${error.message}`);
+  });
 }
 ```
 
@@ -225,7 +258,9 @@ const result = t.parseJSON(schema, '{"name": "John"}');
 if (result.success) {
   console.log(result.value.name); // "John"
 } else {
-  console.error(result.error.message);
+  result.errors.forEach(error => {
+    console.error(`JSON Error at ${error.field.join('.')}: ${error.message}`);
+  });
 }
 ```
 
@@ -249,7 +284,43 @@ type Data = t.TypeOf<typeof schema>;
 
 ## Error Handling
 
-TypeTime provides two approaches for error handling:
+TypeTime features enhanced error handling with multiple error collection and field path tracking:
+
+### Rich Error Information
+
+Each `ParseError` includes:
+- **Field path**: Array showing exactly where the error occurred
+- **Detailed message**: Specific error description
+- **Multiple errors**: Objects collect all validation errors, not just the first one
+
+```typescript
+const schema = t.object({
+  user: t.object({
+    name: t.string,
+    email: t.string.refine(s => s.includes('@'), 'Invalid email'),
+    age: t.number
+  })
+});
+
+const result = t.parse(schema, {
+  user: {
+    name: 123,        // Error: expected string
+    email: "invalid", // Error: Invalid email  
+    age: "25"        // Error: expected number
+  }
+});
+
+if (!result.success) {
+  result.errors.forEach(error => {
+    console.log(`Path: ${error.field.join('.')}`);
+    console.log(`Message: ${error.message}`);
+  });
+  // Output:
+  // Path: user.name, Message: expected string
+  // Path: user.email, Message: Invalid email
+  // Path: user.age, Message: expected number
+}
+```
 
 ### Safe Result Checking
 
@@ -260,8 +331,11 @@ if (result.success) {
   // Safe access to validated data
   console.log(result.value); // Typed data
 } else {
-  console.log(result.error instanceof t.ParseError); // true
-  console.log(result.error.message); // Error description
+  result.errors.forEach(error => {
+    console.log(error instanceof t.ParseError); // true
+    console.log(error.message); // Error description
+    console.log(error.field); // Field path array
+  });
 }
 ```
 
@@ -271,7 +345,7 @@ For cases where you want to assume parsing succeeds and handle errors via except
 
 ```typescript
 try {
-  // Throws ParseError if validation fails
+  // Throws first ParseError if validation fails
   const data = t.parseJSON(schema, jsonString).unwrap();
   
   // Write code assuming parsing succeeded
@@ -281,9 +355,18 @@ try {
 } catch (error) {
   if (error instanceof t.ParseError) {
     console.error('Validation failed:', error.message);
+    console.error('Field path:', error.field.join('.'));
   }
 }
 ```
+
+### Error Collection Behavior
+
+- **Objects**: Collect all field validation errors
+- **Arrays**: Fail fast on first invalid element (but collect errors from that element)
+- **Intersections**: Collect errors from all intersected types
+- **Unions**: Report union-level error after trying all alternatives
+- **Refinements**: Fail fast on first failed refinement in a chain
 
 ## Examples
 
@@ -307,6 +390,11 @@ fetch('/api/data')
     if (result.success) {
       // data is fully typed and validated
       console.log(result.value.data?.title);
+    } else {
+      // Handle validation errors with detailed paths
+      result.errors.forEach(error => {
+        console.error(`API Error at ${error.field.join('.')}: ${error.message}`);
+      });
     }
   });
 ```
@@ -315,11 +403,14 @@ fetch('/api/data')
 
 ```typescript
 const Config = t.object({
-  port: t.number.refine(p => p > 0 && p < 65536),
+  port: t.number.refine(
+    p => p > 0 && p < 65536,
+    p => `Port ${p} must be between 1 and 65535`
+  ),
   host: t.string,
   database: t.object({
     url: t.string,
-    maxConnections: t.optional(t.number)
+    maxConnections: t.optional(t.number.refine(n => n > 0, 'Must be positive'))
   }),
   features: t.object({
     auth: t.boolean,
@@ -330,6 +421,12 @@ const Config = t.object({
 const config = t.parseJSON(Config, process.env.CONFIG_JSON);
 if (config.success) {
   startServer(config.value);
+} else {
+  console.error('Configuration validation failed:');
+  config.errors.forEach(error => {
+    console.error(`  ${error.field.join('.')}: ${error.message}`);
+  });
+  process.exit(1);
 }
 ```
 

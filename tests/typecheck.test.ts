@@ -329,7 +329,9 @@ describe("Refinements", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.errors.length).toBe(1);
-        expect(result.errors[0].message).toBe("string must be longer than 3 characters");
+        expect(result.errors[0].message).toBe(
+          "string must be longer than 3 characters"
+        );
         expect(result.errors[0].field).toEqual([]);
       }
     });
@@ -344,7 +346,9 @@ describe("Refinements", () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.errors.length).toBe(1);
-        expect(result.errors[0].message).toBe('"hi" is too short (2 chars, need > 3)');
+        expect(result.errors[0].message).toBe(
+          '"hi" is too short (2 chars, need > 3)'
+        );
         expect(result.errors[0].field).toEqual([]);
       }
     });
@@ -359,15 +363,15 @@ describe("Refinements", () => {
           age: t.number.refine(
             (v) => v >= 18,
             (v) => `age ${v} is too young, must be 18+`
-          )
-        })
+          ),
+        }),
       });
 
       const result = t.parse(schema, {
         user: {
           email: "invalid-email",
-          age: 16
-        }
+          age: 16,
+        },
       });
 
       expect(result.success).toBe(false);
@@ -402,7 +406,7 @@ describe("Refinements", () => {
         expect(result1.errors[0].message).toBe("too short");
       }
 
-      // Test with input that fails a later refinement  
+      // Test with input that fails a later refinement
       const result2 = t.parse(schema, "ab1");
       expect(result2.success).toBe(false);
       if (!result2.success) {
@@ -422,21 +426,23 @@ describe("Refinements", () => {
           score: t.number.refine(
             (v) => v >= 0 && v <= 100,
             "score must be between 0 and 100"
-          )
+          ),
         })
       );
 
       const result = t.parse(schema, [
         { score: 85 },
         { score: 150 }, // invalid
-        { score: 90 }
+        { score: 90 },
       ]);
 
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.errors.length).toBe(1);
         expect(result.errors[0].field).toEqual([1, "score"]);
-        expect(result.errors[0].message).toBe("score must be between 0 and 100");
+        expect(result.errors[0].message).toBe(
+          "score must be between 0 and 100"
+        );
       }
     });
 
@@ -491,17 +497,17 @@ describe("Refinements", () => {
             value: t.string.refine(
               (v) => v !== "forbidden",
               "this value is not allowed"
-            )
-          })
-        })
+            ),
+          }),
+        }),
       });
 
       const result = t.parse(schema, {
         nested: {
           deep: {
-            value: "forbidden"
-          }
-        }
+            value: "forbidden",
+          },
+        },
       });
 
       expect(result.success).toBe(false);
@@ -1211,12 +1217,12 @@ describe("class type checker", () => {
     it("should provide error messages with field paths in nested objects", () => {
       const schema = t.object({
         instance: classChecker,
-        other: t.string
+        other: t.string,
       });
 
       const result = t.parse(schema, {
         instance: "not an instance",
-        other: "valid"
+        other: "valid",
       });
 
       expect(result.success).toBe(false);
@@ -1280,12 +1286,12 @@ describe("nominal type checker", () => {
     it("should provide error messages with field paths in nested objects", () => {
       const schema = t.object({
         count: positiveNumberChecker,
-        name: t.string
+        name: t.string,
       });
 
       const result = t.parse(schema, {
         count: -10,
-        name: "valid"
+        name: "valid",
       });
 
       expect(result.success).toBe(false);
@@ -1299,7 +1305,7 @@ describe("nominal type checker", () => {
     it("should work with custom nominal types", () => {
       const isEmail = (value: unknown): value is string =>
         typeof value === "string" && value.includes("@");
-      
+
       const emailChecker = t.nominal(isEmail, "Email");
 
       const result = t.parse(emailChecker, "not-an-email");
@@ -1344,6 +1350,56 @@ describe("utility functions", () => {
 });
 
 describe("sanitize behavior", () => {
+  it("should not remove extra properties when intersecting with any", () => {
+    const schema = t.and(
+      t.object({
+        name: t.string,
+        age: t.number,
+      }),
+      t.any
+    );
+
+    const input = {
+      name: "John",
+      age: 30,
+      extra: "should not be removed",
+      another: 123,
+    };
+
+    const result = schema.sanitize(input);
+    expect(result.value).toStrictEqual({
+      name: "John",
+      age: 30,
+      extra: "should not be removed",
+      another: 123,
+    });
+  });
+
+  it("should not remove extra properties when intersecting with unknown", () => {
+    const schema = t.and(
+      t.object({
+        name: t.string,
+        age: t.number,
+      }),
+      t.unknown
+    );
+
+    const input = {
+      name: "John",
+      age: 30,
+      extra: "should not be removed",
+      another: 123,
+    };
+
+    const result = schema.sanitize(input);
+    expect(result.value).toStrictEqual({
+      name: "John",
+      age: 30,
+      extra: "should not be removed",
+      another: 123,
+    });
+  });
+
   it("should remove extra properties from objects", () => {
     const schema = t.object({
       name: t.string,
@@ -1410,7 +1466,7 @@ describe("sanitize behavior", () => {
       name: t.string,
       age: t.number,
       email: t.string,
-      active: t.boolean
+      active: t.boolean,
     });
 
     // Create input with fields in different order
@@ -1419,7 +1475,7 @@ describe("sanitize behavior", () => {
       active: true,
       name: "John",
       age: 25,
-      extraField: "should be removed"
+      extraField: "should be removed",
     };
 
     const result = schema.sanitize(input);
@@ -1427,13 +1483,13 @@ describe("sanitize behavior", () => {
     // Check that the result has fields in schema order
     const resultKeys = Object.keys(result.value);
     const schemaKeys = ["name", "age", "email", "active"];
-    
+
     expect(resultKeys).toEqual(schemaKeys);
     expect(result.value).toEqual({
       name: "John",
       age: 25,
       email: "test@example.com",
-      active: true
+      active: true,
     });
 
     // Verify the original input order was different
@@ -1447,13 +1503,13 @@ describe("sanitize behavior", () => {
         profile: t.object({
           firstName: t.string,
           lastName: t.string,
-          email: t.string
+          email: t.string,
         }),
         settings: t.object({
           theme: t.string,
-          notifications: t.boolean
-        })
-      })
+          notifications: t.boolean,
+        }),
+      }),
     });
 
     // Input with mixed field ordering at multiple levels
@@ -1461,39 +1517,46 @@ describe("sanitize behavior", () => {
       user: {
         settings: {
           notifications: true,
-          theme: "dark"
+          theme: "dark",
         },
         profile: {
           email: "john@example.com",
           firstName: "John",
-          lastName: "Doe"
-        }
-      }
+          lastName: "Doe",
+        },
+      },
     };
 
     const result = schema.sanitize(input);
 
     // Check top-level ordering
     expect(Object.keys(result.value.user)).toEqual(["profile", "settings"]);
-    
+
     // Check nested profile ordering
-    expect(Object.keys(result.value.user.profile)).toEqual(["firstName", "lastName", "email"]);
-    
+    expect(Object.keys(result.value.user.profile)).toEqual([
+      "firstName",
+      "lastName",
+      "email",
+    ]);
+
     // Check nested settings ordering
-    expect(Object.keys(result.value.user.settings)).toEqual(["theme", "notifications"]);
+    expect(Object.keys(result.value.user.settings)).toEqual([
+      "theme",
+      "notifications",
+    ]);
 
     expect(result.value).toEqual({
       user: {
         profile: {
           firstName: "John",
           lastName: "Doe",
-          email: "john@example.com"
+          email: "john@example.com",
         },
         settings: {
           theme: "dark",
-          notifications: true
-        }
-      }
+          notifications: true,
+        },
+      },
     });
   });
 
@@ -1503,7 +1566,7 @@ describe("sanitize behavior", () => {
       name: t.string,
       email: t.optional(t.string),
       age: t.optional(t.number),
-      active: t.boolean
+      active: t.boolean,
     });
 
     // Input with some optional fields missing and different ordering
@@ -1511,19 +1574,24 @@ describe("sanitize behavior", () => {
       active: false,
       name: "Jane",
       email: "jane@example.com",
-      id: 123
+      id: 123,
       // age is missing
     };
 
     const result = schema.sanitize(input);
 
     // Should be in schema order, with only present fields
-    expect(Object.keys(result.value)).toEqual(["id", "name", "email", "active"]);
+    expect(Object.keys(result.value)).toEqual([
+      "id",
+      "name",
+      "email",
+      "active",
+    ]);
     expect(result.value).toEqual({
       id: 123,
-      name: "Jane", 
+      name: "Jane",
       email: "jane@example.com",
-      active: false
+      active: false,
     });
   });
 });

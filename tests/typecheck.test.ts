@@ -1404,6 +1404,128 @@ describe("sanitize behavior", () => {
     const result = schema.sanitize(userInput);
     expect(result.value).toEqual({ type: "user", name: "John" });
   });
+
+  it("should canonicalize field ordering during sanitization", () => {
+    const schema = t.object({
+      name: t.string,
+      age: t.number,
+      email: t.string,
+      active: t.boolean
+    });
+
+    // Create input with fields in different order
+    const input = {
+      email: "test@example.com",
+      active: true,
+      name: "John",
+      age: 25,
+      extraField: "should be removed"
+    };
+
+    const result = schema.sanitize(input);
+
+    // Check that the result has fields in schema order
+    const resultKeys = Object.keys(result.value);
+    const schemaKeys = ["name", "age", "email", "active"];
+    
+    expect(resultKeys).toEqual(schemaKeys);
+    expect(result.value).toEqual({
+      name: "John",
+      age: 25,
+      email: "test@example.com",
+      active: true
+    });
+
+    // Verify the original input order was different
+    const inputKeys = Object.keys(input);
+    expect(inputKeys).not.toEqual(schemaKeys);
+  });
+
+  it("should canonicalize nested object field ordering", () => {
+    const schema = t.object({
+      user: t.object({
+        profile: t.object({
+          firstName: t.string,
+          lastName: t.string,
+          email: t.string
+        }),
+        settings: t.object({
+          theme: t.string,
+          notifications: t.boolean
+        })
+      })
+    });
+
+    // Input with mixed field ordering at multiple levels
+    const input = {
+      user: {
+        settings: {
+          notifications: true,
+          theme: "dark"
+        },
+        profile: {
+          email: "john@example.com",
+          firstName: "John",
+          lastName: "Doe"
+        }
+      }
+    };
+
+    const result = schema.sanitize(input);
+
+    // Check top-level ordering
+    expect(Object.keys(result.value.user)).toEqual(["profile", "settings"]);
+    
+    // Check nested profile ordering
+    expect(Object.keys(result.value.user.profile)).toEqual(["firstName", "lastName", "email"]);
+    
+    // Check nested settings ordering
+    expect(Object.keys(result.value.user.settings)).toEqual(["theme", "notifications"]);
+
+    expect(result.value).toEqual({
+      user: {
+        profile: {
+          firstName: "John",
+          lastName: "Doe",
+          email: "john@example.com"
+        },
+        settings: {
+          theme: "dark",
+          notifications: true
+        }
+      }
+    });
+  });
+
+  it("should canonicalize field ordering with optional fields", () => {
+    const schema = t.object({
+      id: t.number,
+      name: t.string,
+      email: t.optional(t.string),
+      age: t.optional(t.number),
+      active: t.boolean
+    });
+
+    // Input with some optional fields missing and different ordering
+    const input = {
+      active: false,
+      name: "Jane",
+      email: "jane@example.com",
+      id: 123
+      // age is missing
+    };
+
+    const result = schema.sanitize(input);
+
+    // Should be in schema order, with only present fields
+    expect(Object.keys(result.value)).toEqual(["id", "name", "email", "active"]);
+    expect(result.value).toEqual({
+      id: 123,
+      name: "Jane", 
+      email: "jane@example.com",
+      active: false
+    });
+  });
 });
 
 describe("edge cases", () => {

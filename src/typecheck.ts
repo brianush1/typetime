@@ -30,6 +30,14 @@ export type TypeChecker<in out T = any> = {
 function createTypeChecker<T>(base: TypeCheckerBase<T>): TypeChecker<T> {
   const result: TypeChecker<T> = {
     ...base,
+    sanitize(value) {
+      if (!base.check(value)) {
+        throw new Error(
+          "attempt to sanitize a value that does not pass typechecking"
+        );
+      }
+      return base.sanitize(value);
+    },
     toTypeString(options?: TypeStringOptions): string {
       return base.toTypeString({
         ...defaultTypeStringOptions,
@@ -143,8 +151,21 @@ type TypeOfDefaultTop<T> = T extends TypeChecker<infer K>
 export type FieldPath = (string | number)[];
 
 export class ParseError extends Error {
+  fieldPath: string;
+
   constructor(public field: FieldPath, message: string) {
+    const fieldPath = field
+      .map((x) => (typeof x === "number" ? `[${x}]` : `.${x}`))
+      .join("")
+      .replace(/^\./, "");
     super(message);
+    this.fieldPath = fieldPath;
+  }
+
+  toString() {
+    return `${this.field.length > 0 ? this.fieldPath + ": " : ""}${
+      this.message
+    }`;
   }
 }
 

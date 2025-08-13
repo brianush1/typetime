@@ -1808,8 +1808,45 @@ describe("sanitize behavior", () => {
       extra: "remove",
     };
 
-    const result = schema.sanitize(userInput);
-    expect(result.value).toEqual({ type: "user", name: "John" });
+    const adminInput = {
+      type: "admin" as const,
+      permissions: ["perm1", "perm2"],
+    };
+
+    const result1 = schema.sanitize(userInput);
+    expect(result1.value).toEqual({ type: "user", name: "John" });
+
+    const result2 = schema.sanitize(adminInput);
+    expect(result2.value).toEqual({
+      type: "admin",
+      permissions: ["perm1", "perm2"],
+    });
+  });
+
+  it("should throw if sanitize is called with invalid arguments", () => {
+    const schema = t.or(
+      t.object({
+        success: t.literal(true),
+        data: t.unknown,
+      }),
+      t.object({
+        success: t.literal(false),
+        code: t.string.refine((s) => /^[a-zA-Z0-9]$/.test(s)),
+        message: t.string,
+        fields: t.array(t.tuple(t.string, t.string)),
+      })
+    );
+
+    const input = {
+      success: false as const,
+      code: "InvalidInput",
+      message: "expected object",
+      fields: [],
+    };
+
+    expect(() => {
+      schema.sanitize(input);
+    }).toThrow();
   });
 
   it("should canonicalize field ordering during sanitization", () => {

@@ -21,7 +21,10 @@ export type TypeChecker<in out T = any> = {
   check(value: unknown): value is T;
   sanitize(value: T): Sanitized<T>;
   toTypeString(options?: TypeStringOptions): string;
-  refine(check: (value: T) => boolean): TypeChecker<T>;
+  refine(
+    check: (value: T) => boolean,
+    message?: string | ((value: T) => string)
+  ): TypeChecker<T>;
 };
 
 function createTypeChecker<T>(base: TypeCheckerBase<T>): TypeChecker<T> {
@@ -33,11 +36,24 @@ function createTypeChecker<T>(base: TypeCheckerBase<T>): TypeChecker<T> {
         ...(options ?? {}),
       });
     },
-    refine(check) {
+    refine(check, message = "invalid value") {
       return createTypeChecker<T>({
         ...base,
         check(value: unknown): value is T {
-          return base.check(value) && !!check(value);
+          if (!base.check(value)) {
+            return false;
+          }
+
+          if (!check(value)) {
+            const computedMessage =
+              typeof message === "string" ? message : message(value);
+            currentErrors?.push(
+              new ParseError([...currentField], computedMessage)
+            );
+            return false;
+          }
+
+          return true;
         },
       });
     },
@@ -64,7 +80,14 @@ function _class<T extends abstract new (...args: any) => any>(
 ): TypeChecker<InstanceType<T>> {
   return createTypeChecker({
     check(value): value is InstanceType<T> {
-      return value instanceof classObj;
+      if (!(value instanceof classObj)) {
+        currentErrors?.push(
+          new ParseError([...currentField], `expected ${classObj.name}`)
+        );
+        return false;
+      }
+
+      return true;
     },
     sanitize(value) {
       return {
@@ -85,7 +108,14 @@ export function nominal<T>(
 ): TypeChecker<T> {
   return createTypeChecker({
     check(value): value is T {
-      return checker(value);
+      if (!checker(value)) {
+        currentErrors?.push(
+          new ParseError([...currentField], `expected ${name}`)
+        );
+        return false;
+      }
+
+      return true;
     },
     sanitize(value) {
       return {
@@ -110,19 +140,25 @@ type TypeOfDefaultTop<T> = T extends TypeChecker<infer K>
   ? K | undefined
   : unknown;
 
-export class ParseError extends Error {}
+export type FieldPath = (string | number)[];
+
+export class ParseError extends Error {
+  constructor(public field: FieldPath, message: string) {
+    super(message);
+  }
+}
 
 export type ParseResult<T> =
   | {
       success: true;
       value: T;
-      error: undefined;
+      errors: undefined;
       unwrap: () => T;
     }
   | {
       success: false;
       value: undefined;
-      error: ParseError;
+      errors: ParseError[];
       unwrap: () => never;
     };
 
@@ -130,16 +166,15 @@ export function parseJSON<T>(
   schema: TypeChecker<T>,
   json: string
 ): ParseResult<T> {
-  // TODO: add location information to errors
   let obj: unknown;
   try {
     obj = JSON.parse(json);
   } catch (e) {
-    const error = new ParseError("Failed to parse JSON");
+    const error = new ParseError([], "Failed to parse JSON");
     return {
       success: false,
       value: undefined,
-      error,
+      errors: [error],
       unwrap: () => {
         throw error;
       },
@@ -149,25 +184,32 @@ export function parseJSON<T>(
   return parse(schema, obj);
 }
 
+let currentErrors: ParseError[] | undefined;
+const currentField: FieldPath = [];
 export function parse<T>(schema: TypeChecker<T>, obj: unknown): ParseResult<T> {
-  // TODO: add location information to errors
-  if (!schema.check(obj)) {
-    const error = new ParseError("Invalid type");
-    return {
-      success: false,
-      value: undefined,
-      error,
-      unwrap: () => {
-        throw error;
-      },
-    };
+  const save = currentErrors;
+  currentErrors = [];
+  try {
+    if (!schema.check(obj)) {
+      const errors = currentErrors;
+      return {
+        success: false,
+        value: undefined,
+        errors,
+        unwrap: () => {
+          throw errors[0];
+        },
+      };
+    }
+  } finally {
+    currentErrors = save;
   }
 
   const { value } = schema.sanitize(obj);
   return {
     success: true,
     value,
-    error: undefined,
+    errors: undefined,
     unwrap: () => value,
   };
 }
@@ -180,13 +222,25 @@ export function array<T>(type: TypeChecker<T>): TypeChecker<T[]> {
   return createTypeChecker({
     check(value): value is T[] {
       if (!(value instanceof Array)) {
+        currentErrors?.push(
+          new ParseError([...currentField], "expected array")
+        );
         return false;
       }
 
-      for (const [_, v] of Object.entries(value)) {
-        const success = type.check(v);
-        if (!success) {
-          return false;
+      for (const [i, v] of Object.entries(value)) {
+        if (String(parseInt(i)) !== i) {
+          continue;
+        }
+
+        try {
+          currentField.push(Number(i));
+          const success = type.check(v);
+          if (!success) {
+            return false;
+          }
+        } finally {
+          currentField.pop();
         }
       }
 
@@ -240,26 +294,38 @@ export function object<
   return createTypeChecker({
     check(value): value is Target {
       if (!(value instanceof Object)) {
+        currentErrors?.push(
+          new ParseError([...currentField], "expected object")
+        );
         return false;
       }
 
+      let good = true;
       for (const [key, type] of Object.entries(schema)) {
-        if (isOptionalWrapper(type)) {
-          if (Object.hasOwn(value, key) && (value as any)[key] !== undefined) {
-            const success = type.optional.check((value as any)[key]);
+        try {
+          currentField.push(key);
+          if (isOptionalWrapper(type)) {
+            if (
+              Object.hasOwn(value, key) &&
+              (value as any)[key] !== undefined
+            ) {
+              const success = type.optional.check((value as any)[key]);
+              if (!success) {
+                good = false;
+              }
+            }
+          } else {
+            const success = type.check((value as any)[key]);
             if (!success) {
-              return false;
+              good = false;
             }
           }
-        } else {
-          const success = type.check((value as any)[key]);
-          if (!success) {
-            return false;
-          }
+        } finally {
+          currentField.pop();
         }
       }
 
-      return true;
+      return good;
     },
     sanitize(value: Target): Sanitized<Target> {
       const newValue: { [key: string]: unknown } = {};
@@ -301,7 +367,14 @@ type LiteralBase = string | number | boolean | null | undefined;
 export function literal<T extends LiteralBase>(arg: T): TypeChecker<T> {
   return createTypeChecker({
     check(value): value is T {
-      return value === arg;
+      if (value !== arg) {
+        currentErrors?.push(
+          new ParseError([...currentField], `expected ${this.toTypeString({})}`)
+        );
+        return false;
+      }
+
+      return true;
     },
     sanitize() {
       return {
@@ -311,8 +384,7 @@ export function literal<T extends LiteralBase>(arg: T): TypeChecker<T> {
     },
     toTypeString() {
       if (typeof arg === "string") {
-        // TODO: proper escaping
-        return `"${arg}"`;
+        return JSON.stringify(arg);
       } else if (arg === null) {
         return "null";
       } else if (arg === undefined) {
@@ -336,11 +408,18 @@ export function or<T extends TypeChecker[]>(
   return createTypeChecker({
     check(value): value is Target {
       for (const type of args) {
+        const len = currentErrors?.length ?? 0;
         if (type.check(value)) {
           return true;
         }
+        while (currentErrors && currentErrors.length > len) {
+          currentErrors.pop();
+        }
       }
 
+      currentErrors?.push(
+        new ParseError([...currentField], `expected ${this.toTypeString({})}`)
+      );
       return false;
     },
     sanitize(value) {
@@ -413,13 +492,15 @@ export function and<T extends TypeChecker[]>(
     TypeOfDefaultTop<T[9]>;
   return createTypeChecker({
     check(value): value is Target {
+      let good = true;
       for (const type of args) {
+        // this will naturally populate currentErrors appropriately
         if (!type.check(value)) {
-          return false;
+          good = false;
         }
       }
 
-      return true;
+      return good;
     },
     sanitize(value) {
       const obj: any = {};
@@ -468,7 +549,14 @@ export function and<T extends TypeChecker[]>(
 function primitive<T>(name: string): TypeChecker<T> {
   return createTypeChecker({
     check(value): value is T {
-      return typeof value === name;
+      if (typeof value !== name) {
+        currentErrors?.push(
+          new ParseError([...currentField], `expected ${name}`)
+        );
+        return false;
+      }
+
+      return true;
     },
     sanitize(value: T): Sanitized<T> {
       return { __sanitized: true, value };
@@ -485,7 +573,12 @@ export const boolean: TypeChecker<boolean> = primitive<boolean>("boolean");
 
 const _null: TypeChecker<null> = createTypeChecker({
   check(value): value is null {
-    return value === null;
+    if (value !== null) {
+      currentErrors?.push(new ParseError([...currentField], "expected null"));
+      return false;
+    }
+
+    return true;
   },
   sanitize(_value: null): Sanitized<null> {
     return { __sanitized: true, value: null };
@@ -498,7 +591,14 @@ export { _null as null };
 
 const _undefined: TypeChecker<void | undefined> = createTypeChecker({
   check(value): value is void | undefined {
-    return value === undefined;
+    if (value !== undefined) {
+      currentErrors?.push(
+        new ParseError([...currentField], "expected undefined")
+      );
+      return false;
+    }
+
+    return true;
   },
   sanitize(_value: void | undefined): Sanitized<void | undefined> {
     return { __sanitized: true, value: undefined };

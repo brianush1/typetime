@@ -305,6 +305,213 @@ describe("Refinements", () => {
     expect(type.check("ASDA")).toBeFalsy();
     expect(type.check(46)).toBeFalsy();
   });
+
+  describe("refinement error handling", () => {
+    it("should provide default error messages for failed refinements", () => {
+      const schema = t.string.refine((v) => v.length > 3);
+      const result = t.parse(schema, "hi");
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].message).toBe("invalid value");
+        expect(result.errors[0].field).toEqual([]);
+      }
+    });
+
+    it("should support custom string error messages", () => {
+      const schema = t.string.refine(
+        (v) => v.length > 3,
+        "string must be longer than 3 characters"
+      );
+      const result = t.parse(schema, "hi");
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].message).toBe("string must be longer than 3 characters");
+        expect(result.errors[0].field).toEqual([]);
+      }
+    });
+
+    it("should support custom function error messages", () => {
+      const schema = t.string.refine(
+        (v) => v.length > 3,
+        (v) => `"${v}" is too short (${v.length} chars, need > 3)`
+      );
+      const result = t.parse(schema, "hi");
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].message).toBe('"hi" is too short (2 chars, need > 3)');
+        expect(result.errors[0].field).toEqual([]);
+      }
+    });
+
+    it("should handle refinement errors in nested objects", () => {
+      const schema = t.object({
+        user: t.object({
+          email: t.string.refine(
+            (v) => v.includes("@"),
+            "must be a valid email"
+          ),
+          age: t.number.refine(
+            (v) => v >= 18,
+            (v) => `age ${v} is too young, must be 18+`
+          )
+        })
+      });
+
+      const result = t.parse(schema, {
+        user: {
+          email: "invalid-email",
+          age: 16
+        }
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+
+        const emailError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["user", "email"])
+        );
+        expect(emailError).toBeDefined();
+        expect(emailError?.message).toBe("must be a valid email");
+
+        const ageError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["user", "age"])
+        );
+        expect(ageError).toBeDefined();
+        expect(ageError?.message).toBe("age 16 is too young, must be 18+");
+      }
+    });
+
+    it("should handle multiple refinements on the same type", () => {
+      const schema = t.string
+        .refine((v) => v.length >= 3, "too short")
+        .refine((v) => v.length <= 10, "too long")
+        .refine((v) => /^[a-zA-Z]+$/.test(v), "must contain only letters");
+
+      // Test with input that fails first refinement
+      const result1 = t.parse(schema, "ab");
+      expect(result1.success).toBe(false);
+      if (!result1.success) {
+        expect(result1.errors.length).toBe(1);
+        expect(result1.errors[0].message).toBe("too short");
+      }
+
+      // Test with input that fails a later refinement  
+      const result2 = t.parse(schema, "ab1");
+      expect(result2.success).toBe(false);
+      if (!result2.success) {
+        expect(result2.errors.length).toBe(1);
+        // Refinements fail fast - stops at first failed refinement
+        expect(result2.errors[0].message).toBe("must contain only letters");
+      }
+
+      // Test with input that passes all refinements
+      const result3 = t.parse(schema, "hello");
+      expect(result3.success).toBe(true);
+    });
+
+    it("should handle refinement errors in arrays", () => {
+      const schema = t.array(
+        t.object({
+          score: t.number.refine(
+            (v) => v >= 0 && v <= 100,
+            "score must be between 0 and 100"
+          )
+        })
+      );
+
+      const result = t.parse(schema, [
+        { score: 85 },
+        { score: 150 }, // invalid
+        { score: 90 }
+      ]);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual([1, "score"]);
+        expect(result.errors[0].message).toBe("score must be between 0 and 100");
+      }
+    });
+
+    it("should handle base type failure before refinement", () => {
+      const schema = t.string.refine((v) => v.length > 3, "too short");
+      const result = t.parse(schema, 123);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        // Should get base type error, not refinement error
+        expect(result.errors[0].message).toBe("expected string");
+      }
+    });
+
+    it("should handle refinements in union types", () => {
+      const schema = t.or(
+        t.string.refine((v) => v.length > 5, "string too short"),
+        t.number.refine((v) => v > 100, "number too small")
+      );
+
+      const result = t.parse(schema, "hi");
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        // Should get the union error message, not individual refinement errors
+        expect(result.errors[0].message).toContain("expected");
+      }
+    });
+
+    it("should handle refinements in intersection types", () => {
+      const schema = t.and(
+        t.object({ x: t.number }),
+        t.object({ x: t.number.refine((v) => v > 0, "x must be positive") })
+      );
+
+      const result = t.parse(schema, { x: -5 });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual(["x"]);
+        expect(result.errors[0].message).toBe("x must be positive");
+      }
+    });
+
+    it("should preserve field paths through refinements", () => {
+      const schema = t.object({
+        nested: t.object({
+          deep: t.object({
+            value: t.string.refine(
+              (v) => v !== "forbidden",
+              "this value is not allowed"
+            )
+          })
+        })
+      });
+
+      const result = t.parse(schema, {
+        nested: {
+          deep: {
+            value: "forbidden"
+          }
+        }
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual(["nested", "deep", "value"]);
+        expect(result.errors[0].message).toBe("this value is not allowed");
+      }
+    });
+  });
 });
 
 describe("toTypeString", () => {
@@ -477,7 +684,7 @@ describe("parseJSON", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.value).toEqual({ name: "John", age: 30, active: true });
-      expect(result.error).toBeUndefined();
+      expect(result.errors).toBeUndefined();
       expect(result.unwrap()).toEqual({ name: "John", age: 30, active: true });
     }
   });
@@ -488,8 +695,11 @@ describe("parseJSON", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toBeInstanceOf(t.ParseError);
-      expect(result.error.message).toBe("Failed to parse JSON");
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBe(1);
+      expect(result.errors[0]).toBeInstanceOf(t.ParseError);
+      expect(result.errors[0].message).toBe("Failed to parse JSON");
+      expect(result.errors[0].field).toEqual([]);
       expect(result.value).toBeUndefined();
       expect(() => result.unwrap()).toThrow(t.ParseError);
     }
@@ -501,8 +711,9 @@ describe("parseJSON", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toBeInstanceOf(t.ParseError);
-      expect(result.error.message).toBe("Invalid type");
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toBeInstanceOf(t.ParseError);
       expect(() => result.unwrap()).toThrow(t.ParseError);
     }
   });
@@ -541,10 +752,400 @@ describe("parse", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error).toBeInstanceOf(t.ParseError);
-      expect(result.error.message).toBe("Invalid type");
+      expect(result.errors).toBeDefined();
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toBeInstanceOf(t.ParseError);
       expect(() => result.unwrap()).toThrow(t.ParseError);
     }
+  });
+});
+
+describe("ParseError and error handling", () => {
+  describe("ParseError class", () => {
+    it("should create ParseError with field path and message", () => {
+      const error = new t.ParseError(["user", "name"], "expected string");
+      expect(error).toBeInstanceOf(t.ParseError);
+      expect(error.field).toEqual(["user", "name"]);
+      expect(error.message).toBe("expected string");
+    });
+
+    it("should create ParseError with empty field path", () => {
+      const error = new t.ParseError([], "root level error");
+      expect(error.field).toEqual([]);
+      expect(error.message).toBe("root level error");
+    });
+
+    it("should create ParseError with numeric indices in field path", () => {
+      const error = new t.ParseError(["users", 0, "name"], "expected string");
+      expect(error.field).toEqual(["users", 0, "name"]);
+    });
+  });
+
+  describe("error collection in parse results", () => {
+    it("should return multiple errors for intersection types", () => {
+      const schema = t.and(
+        t.object({ x: t.string }),
+        t.object({ y: t.number })
+      );
+      const result = t.parse(schema, { x: 123, y: "invalid" });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors.every((e) => e instanceof t.ParseError)).toBe(
+          true
+        );
+      }
+    });
+
+    it("should provide field path information in errors", () => {
+      const schema = t.object({
+        user: t.object({
+          name: t.string,
+          age: t.number,
+        }),
+      });
+      const result = t.parse(schema, { user: { name: 123, age: "invalid" } });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+        // Object validation collects all errors instead of failing fast
+        const nameError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["user", "name"])
+        );
+        expect(nameError).toBeDefined();
+        expect(nameError?.message).toBe("expected string");
+
+        const ageError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["user", "age"])
+        );
+        expect(ageError).toBeDefined();
+        expect(ageError?.message).toBe("expected number");
+      }
+    });
+
+    it("should provide specific error messages for primitive types", () => {
+      const result = t.parse(t.string, 123);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected string");
+      }
+    });
+
+    it("should provide specific error messages for array types", () => {
+      const result = t.parse(t.array(t.string), "not an array");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected array");
+      }
+    });
+
+    it("should provide specific error messages for object types", () => {
+      const result = t.parse(t.object({ x: t.string }), "not an object");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected object");
+      }
+    });
+
+    it("should provide specific error messages for null type", () => {
+      const result = t.parse(t.null, "not null");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected null");
+      }
+    });
+
+    it("should provide specific error messages for undefined type", () => {
+      const result = t.parse(t.undefined, "not undefined");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected undefined");
+      }
+    });
+
+    it("should provide type string in union type error messages", () => {
+      const schema = t.or(t.string, t.number);
+      const result = t.parse(schema, true);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors[0].message).toBe("expected string | number");
+      }
+    });
+
+    it("should handle union type error cleanup", () => {
+      const schema = t.or(
+        t.object({ type: t.literal("A"), valueA: t.string }),
+        t.object({ type: t.literal("B"), valueB: t.number })
+      );
+      const result = t.parse(schema, { type: "C", invalid: "data" });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        // Should only have the final union error, not individual failed attempts
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].message).toContain("expected");
+      }
+    });
+  });
+
+  describe("field path tracking", () => {
+    it("should track field paths in nested objects", () => {
+      const schema = t.object({
+        user: t.object({
+          profile: t.object({
+            name: t.string,
+            settings: t.object({
+              theme: t.literal("dark"),
+            }),
+          }),
+        }),
+      });
+
+      const result = t.parse(schema, {
+        user: {
+          profile: {
+            name: 123, // should be string
+            settings: {
+              theme: "light", // should be "dark"
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+
+        // Object validation now collects all errors
+        const nameError = result.errors.find(
+          (e) =>
+            JSON.stringify(e.field) ===
+            JSON.stringify(["user", "profile", "name"])
+        );
+        expect(nameError).toBeDefined();
+        expect(nameError?.message).toBe("expected string");
+
+        const themeError = result.errors.find(
+          (e) =>
+            JSON.stringify(e.field) ===
+            JSON.stringify(["user", "profile", "settings", "theme"])
+        );
+        expect(themeError).toBeDefined();
+        expect(themeError?.message).toBe('expected "dark"');
+      }
+    });
+
+    it("should track field paths in arrays", () => {
+      const schema = t.array(
+        t.object({
+          id: t.number,
+          name: t.string,
+        })
+      );
+
+      const result = t.parse(schema, [
+        { id: 1, name: "valid" },
+        { id: "invalid", name: 123 }, // both fields invalid - object collects all errors now
+        { id: 3, name: "valid" },
+      ]);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+
+        // Array still fails fast, but object within array collects all its errors
+        const idError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify([1, "id"])
+        );
+        expect(idError).toBeDefined();
+        expect(idError?.message).toBe("expected number");
+
+        const nameError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify([1, "name"])
+        );
+        expect(nameError).toBeDefined();
+        expect(nameError?.message).toBe("expected string");
+      }
+    });
+
+    it("should track field paths in nested arrays", () => {
+      const schema = t.object({
+        users: t.array(
+          t.object({
+            name: t.string,
+            tags: t.array(t.string),
+          })
+        ),
+      });
+
+      const result = t.parse(schema, {
+        users: [
+          { name: "user1", tags: ["tag1", 123] }, // invalid tag - fails fast here
+          { name: 456, tags: ["valid"] }, // won't reach due to fail-fast
+        ],
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+
+        // Fails fast on first invalid element in nested array
+        const tagError = result.errors.find(
+          (e) =>
+            JSON.stringify(e.field) === JSON.stringify(["users", 0, "tags", 1])
+        );
+        expect(tagError).toBeDefined();
+        expect(tagError?.message).toBe("expected string");
+      }
+    });
+
+    it("should handle array index filtering correctly", () => {
+      const schema = t.array(t.string);
+
+      // Create array with non-numeric properties (should be ignored)
+      const testArray = ["valid", 123];
+      (testArray as any).nonNumericProp = "should be ignored";
+
+      const result = t.parse(schema, testArray);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual([1]); // Only numeric index 1
+        expect(result.errors[0].message).toBe("expected string");
+      }
+    });
+
+    it("should handle optional fields with invalid values", () => {
+      const schema = t.object({
+        required: t.string,
+        optional: t.optional(t.number),
+      });
+
+      const result = t.parse(schema, {
+        required: 123, // invalid
+        optional: "not a number", // also invalid - now captured
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+
+        const requiredError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["required"])
+        );
+        expect(requiredError?.message).toBe("expected string");
+
+        const optionalError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["optional"])
+        );
+        expect(optionalError?.message).toBe("expected number");
+      }
+    });
+
+    it("should handle missing required fields", () => {
+      const schema = t.object({
+        required: t.string,
+        optional: t.optional(t.number),
+      });
+
+      const result = t.parse(schema, { optional: 42 });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        const error = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["required"])
+        );
+        expect(error?.message).toBe("expected string");
+      }
+    });
+
+    it("should handle literal type errors with proper field paths", () => {
+      const schema = t.object({
+        status: t.literal("active"),
+        type: t.enum("user", "admin"),
+      });
+
+      const result = t.parse(schema, {
+        status: "inactive", // now properly reports error
+        type: "guest", // also reports error - both captured
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(2);
+
+        const statusError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["status"])
+        );
+        expect(statusError).toBeDefined();
+        expect(statusError?.message).toBe('expected "active"');
+
+        const typeError = result.errors.find(
+          (e) => JSON.stringify(e.field) === JSON.stringify(["type"])
+        );
+        expect(typeError).toBeDefined();
+        expect(typeError?.message).toBe('expected "user" | "admin"');
+      }
+    });
+  });
+
+  describe("error boundary testing", () => {
+    it("should handle deeply nested failures without stack overflow", () => {
+      // Create deeply nested schema
+      let schema: any = t.object({ value: t.string });
+      for (let i = 0; i < 10; i++) {
+        schema = t.object({ nested: schema });
+      }
+
+      // Create matching deep structure with error at the end
+      let testData: any = { value: 123 }; // error here
+      for (let i = 0; i < 10; i++) {
+        testData = { nested: testData };
+      }
+
+      const result = t.parse(schema, testData);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0].field.length).toBe(11); // 10 'nested' + 1 'value'
+        expect(result.errors[0].field[10]).toBe("value");
+      }
+    });
+
+    it("should handle arrays with many invalid elements", () => {
+      const schema = t.array(t.number);
+      const testData = Array(100).fill("not a number");
+
+      const result = t.parse(schema, testData);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        // Arrays fail fast on first invalid element
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual([0]);
+        expect(result.errors[0].message).toBe("expected number");
+      }
+    });
+
+    it("should maintain error isolation between parse calls", () => {
+      const schema = t.string;
+
+      const result1 = t.parse(schema, 123);
+      const result2 = t.parse(schema, true);
+
+      expect(result1.success).toBe(false);
+      expect(result2.success).toBe(false);
+
+      if (!result1.success && !result2.success) {
+        expect(result1.errors.length).toBe(1);
+        expect(result2.errors.length).toBe(1);
+        expect(result1.errors[0].message).toBe("expected string");
+        expect(result2.errors[0].message).toBe("expected string");
+      }
+    });
   });
 });
 
@@ -582,6 +1183,50 @@ describe("class type checker", () => {
   it("should generate correct type string", () => {
     expect(classChecker.toTypeString()).toBe("TestClass");
   });
+
+  describe("error handling", () => {
+    it("should provide error messages for non-instance values", () => {
+      const result1 = t.parse(classChecker, "not an instance");
+      expect(result1.success).toBe(false);
+      if (!result1.success) {
+        expect(result1.errors.length).toBe(1);
+        expect(result1.errors[0].message).toBe("expected TestClass");
+      }
+
+      const result2 = t.parse(classChecker, { value: "looks like instance" });
+      expect(result2.success).toBe(false);
+      if (!result2.success) {
+        expect(result2.errors.length).toBe(1);
+        expect(result2.errors[0].message).toBe("expected TestClass");
+      }
+
+      const result3 = t.parse(classChecker, new AnotherClass(123));
+      expect(result3.success).toBe(false);
+      if (!result3.success) {
+        expect(result3.errors.length).toBe(1);
+        expect(result3.errors[0].message).toBe("expected TestClass");
+      }
+    });
+
+    it("should provide error messages with field paths in nested objects", () => {
+      const schema = t.object({
+        instance: classChecker,
+        other: t.string
+      });
+
+      const result = t.parse(schema, {
+        instance: "not an instance",
+        other: "valid"
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual(["instance"]);
+        expect(result.errors[0].message).toBe("expected TestClass");
+      }
+    });
+  });
 });
 
 describe("nominal type checker", () => {
@@ -606,6 +1251,76 @@ describe("nominal type checker", () => {
 
   it("should generate correct type string", () => {
     expect(positiveNumberChecker.toTypeString()).toBe("PositiveNumber");
+  });
+
+  describe("error handling", () => {
+    it("should provide error messages for values that fail predicate", () => {
+      const result1 = t.parse(positiveNumberChecker, -5);
+      expect(result1.success).toBe(false);
+      if (!result1.success) {
+        expect(result1.errors.length).toBe(1);
+        expect(result1.errors[0].message).toBe("expected PositiveNumber");
+      }
+
+      const result2 = t.parse(positiveNumberChecker, 0);
+      expect(result2.success).toBe(false);
+      if (!result2.success) {
+        expect(result2.errors.length).toBe(1);
+        expect(result2.errors[0].message).toBe("expected PositiveNumber");
+      }
+
+      const result3 = t.parse(positiveNumberChecker, "not a number");
+      expect(result3.success).toBe(false);
+      if (!result3.success) {
+        expect(result3.errors.length).toBe(1);
+        expect(result3.errors[0].message).toBe("expected PositiveNumber");
+      }
+    });
+
+    it("should provide error messages with field paths in nested objects", () => {
+      const schema = t.object({
+        count: positiveNumberChecker,
+        name: t.string
+      });
+
+      const result = t.parse(schema, {
+        count: -10,
+        name: "valid"
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual(["count"]);
+        expect(result.errors[0].message).toBe("expected PositiveNumber");
+      }
+    });
+
+    it("should work with custom nominal types", () => {
+      const isEmail = (value: unknown): value is string =>
+        typeof value === "string" && value.includes("@");
+      
+      const emailChecker = t.nominal(isEmail, "Email");
+
+      const result = t.parse(emailChecker, "not-an-email");
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].message).toBe("expected Email");
+      }
+    });
+
+    it("should handle nominal types in arrays", () => {
+      const schema = t.array(positiveNumberChecker);
+
+      const result = t.parse(schema, [1, 5, -2, 10]);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.errors.length).toBe(1);
+        expect(result.errors[0].field).toEqual([2]); // index of -2
+        expect(result.errors[0].message).toBe("expected PositiveNumber");
+      }
+    });
   });
 });
 
